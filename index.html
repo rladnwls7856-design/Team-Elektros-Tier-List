@@ -375,7 +375,7 @@ const FIREBASE_CONFIG={
   measurementId:"G-9G6QVC6JTD"
 };
 const CLOUD_BOARD="team-elektros", CLOUD_CHUNK=600000;
-let cloudDb=null,cloudSaveTimer=null,cloudApplying=false;
+let cloudDb=null,cloudSaveTimer=null,cloudApplying=false,cloudLocalDirty=false,cloudSaving=false;
 try{
   firebase.initializeApp(FIREBASE_CONFIG);
   cloudDb=firebase.firestore();
@@ -400,6 +400,8 @@ async function loadCloudState(){
 }
 async function saveCloudStateNow(){
   if(!cloudDb||!state||cloudApplying)return;
+  cloudSaveTimer=null;
+  cloudSaving=true;
   try{
     const json=BrawlStorage.serializeState(state);
     const parts=[];
@@ -409,10 +411,13 @@ async function saveCloudStateNow(){
     for(let i=0;i<parts.length;i++) await ref.collection("chunks").doc(String(i)).set({data:parts[i]});
     for(let i=parts.length;i<oldN;i++) await ref.collection("chunks").doc(String(i)).delete();
     await ref.set({chunks:parts.length,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
+    cloudLocalDirty=false;
   }catch(e){console.warn("Cloud save failed; browser copy is still safe.",e)}
+  finally{cloudSaving=false}
 }
 function scheduleCloudSave(){
   if(!cloudDb||!state||cloudApplying)return;
+  cloudLocalDirty=true;
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer=setTimeout(saveCloudStateNow,900);
 }
@@ -429,6 +434,7 @@ function startCloudLiveSync(){
   const ref=cloudDb.collection("boards").doc(CLOUD_BOARD);
   cloudUnsubscribe=ref.onSnapshot(async snap=>{
     if(!snap.exists||!state)return;
+    if(cloudLocalDirty||cloudSaving)return;
     const data=snap.data()||{},key=cloudUpdateKey(data);
     // The first snapshot is the board boot already loaded. Local saves also arrive here;
     // re-applying an identical board is harmless, but skipping the known revision avoids flicker.
@@ -464,7 +470,7 @@ function startCloudLiveSync(){
 // This still updates the open page automatically; no manual refresh is needed.
 let cloudPollTimer=null,cloudPollBusy=false;
 async function pollCloudState(){
-  if(!cloudDb||!state||cloudApplying||cloudPollBusy)return;
+  if(!cloudDb||!state||cloudApplying||cloudPollBusy||cloudLocalDirty||cloudSaving)return;
   cloudPollBusy=true;
   try{
     const ref=cloudDb.collection("boards").doc(CLOUD_BOARD),meta=await ref.get({source:"server"});
@@ -769,7 +775,8 @@ function renderRoleFilters(){
       if(activeRole===old)activeRole=newName;
       persist();renderAll();toast("Role updated");
     };
-    color.oninput=()=>{r.color=color.value;persist();renderRoleFilters();renderBoard();openRoleAssignment()};
+    color.oninput=()=>{r.color=color.value;renderBoard();openRoleAssignment()};
+    color.onchange=()=>{r.color=color.value;persist();renderAll();toast("Role color updated")};
     del.onclick=()=>{
       const old=r.name;if(!confirm("Delete role '"+old+"'?"))return;
       state.roles.splice(index,1);
