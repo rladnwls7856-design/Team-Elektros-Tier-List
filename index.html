@@ -1083,10 +1083,16 @@ document.getElementById("search").oninput=renderBoard;
 const noteSaver=BrawlStorage.createDebouncer(()=>{persist();renderSidebar()},500);
 document.getElementById("brawlerNote").addEventListener("input",e=>{
   if(!selected)return;
-  state.notes[selected]=e.target.value;noteSaver.schedule();
+  state.notes[selected]=e.target.value;
+  // Mark the board dirty immediately so realtime/polling can never overwrite text
+  // during the debounce window before the note is persisted.
+  if(cloudDb&&!cloudApplying){cloudLocalDirty=true;cloudEditGeneration++}
+  noteSaver.schedule();
 });
 document.getElementById("mapNote").addEventListener("input",e=>{
-  state.mapNotes[currentMap]=e.target.value;noteSaver.schedule();
+  state.mapNotes[currentMap]=e.target.value;
+  if(cloudDb&&!cloudApplying){cloudLocalDirty=true;cloudEditGeneration++}
+  noteSaver.schedule();
 });
 window.addEventListener("pagehide",()=>noteSaver.flush());
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")noteSaver.flush()});
