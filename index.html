@@ -813,6 +813,12 @@ function renderSidebar(){
   modes.forEach(m=>{
     const open=searching||expandedModes.has(m.name);
     const head=document.createElement("button");head.className="modehead"+(open?" open":"");
+    const modeColors={"Bounty":"#f2c94c","Heist":"#e75480","Hot Zone":"#d64545","Gem Grab":"#4b1f6f","Knockout":"#e67e22","Brawl Ball":"#6b7280"};
+    if(modeColors[m.name]){
+      head.style.background=modeColors[m.name];
+      head.style.color="#fff";
+      head.style.borderColor=modeColors[m.name];
+    }
     head.dataset.focusKey="mode:"+m.name;
     // While searching every mode is forced open, so the header is not a working toggle.
     if(searching)head.setAttribute("aria-disabled","true");else head.setAttribute("aria-expanded",String(open));
