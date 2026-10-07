@@ -680,20 +680,15 @@
     return { added, assigned };
   }
 
-  // Roles are the seven official classes, nothing else (custom roles were removed). Brawlers keep
-  // the classes they were given (canonical case, no duplicates); a brawler left with nothing but
-  // removed custom roles falls back to its class, as does any brawler with no entry yet (first
-  // run, new releases). A brawler deliberately untagged ([]) stays untagged.
+  // Keep roles fully user-editable. On an old/empty board, seed the official classes once;
+  // after that, custom names, colors, additions and deletions are preserved.
   function ensureClassRoles(state, roster) {
-    const canonical = new Map(CLASS_ORDER.map((c) => [c.toLowerCase(), c]));
-    state.roles = CLASS_ORDER.map((c) => ({ name: c, color: CLASS_ROLE_COLORS[c] }));
+    if (!Array.isArray(state.roles)) state.roles = [];
+    if (!state.classRolesAdded && state.roles.length === 0) addClassRoles(state, roster, { newOnly: true });
+    const valid = new Set(state.roles.map((r) => r.name));
     for (const name of Object.keys(state.brawlerRoles)) {
-      const before = state.brawlerRoles[name];
-      const kept = [...new Set(before.map((r) => canonical.get(String(r).toLowerCase())).filter(Boolean))];
-      if (!kept.length && before.length) delete state.brawlerRoles[name];
-      else state.brawlerRoles[name] = kept;
+      state.brawlerRoles[name] = [...new Set((state.brawlerRoles[name] || []).filter((r) => valid.has(r)))];
     }
-    addClassRoles(state, roster, { newOnly: true });
     state.classRolesAdded = true;
     return state;
   }
