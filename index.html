@@ -96,17 +96,17 @@ span.mapbtn{cursor:default}span.mapbtn:hover{background:transparent}
 .team span{display:flex;align-items:center;gap:var(--space-2)}
 
 /* role bar */
-.rolebar{display:flex;gap:var(--space-3);align-items:center;padding:var(--space-3) 0;border-bottom:2px solid var(--color-divider)}
+.rolebar{display:grid;grid-template-columns:auto 1fr;gap:var(--space-2) var(--space-3);align-items:start;padding:var(--space-3) 0;border-bottom:2px solid var(--color-divider)}
 .rolebar .rb-label{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-700)}
-.rolefilters{display:flex;gap:var(--space-2);flex-wrap:wrap;flex:1;align-items:center}
+.rolefilters{display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;grid-column:2}
 .rolechip{display:inline-flex;align-items:center;gap:var(--space-2);border:1px solid var(--color-divider);background:transparent;padding:var(--space-1) var(--space-3);font-size:12px;font-weight:600}
 .rolechip:not(.active):hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
 .rolechip.active{background:var(--color-text);color:var(--color-bg);border-color:var(--color-text)}
 .role-dot{display:inline-block;width:9px;height:9px}
-.role-manage{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+.role-manage{grid-column:2;display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;padding-top:8px;border-top:1px solid var(--color-divider)}
 .role-manage input[type="text"]{width:120px;padding:5px 7px}
 .role-manage input[type="color"]{width:32px;height:30px;padding:2px;border:1px solid var(--color-divider);background:transparent}
-.role-edit-row{display:flex;align-items:center;gap:6px;width:100%;margin-top:6px}
+.role-edit-row{display:flex;align-items:center;gap:6px;margin:0}
 .role-edit-row .role-name-edit{width:130px;padding:5px 7px}
 .role-edit-row .role-color-edit{width:34px;height:30px;padding:2px}
 .role-edit-row .btn{padding:5px 8px;font-size:11px}
@@ -282,7 +282,7 @@ textarea.input:disabled{opacity:.45;cursor:not-allowed}
     <div class="rolebar">
       <span class="rb-label">Roles</span>
       <div class="rolefilters" id="roleFilters"></div>
-      <div class="role-manage">
+      <div class="role-manage" id="roleManage">
         <input class="input" id="newRoleName" type="text" maxlength="28" placeholder="New role" aria-label="New role name">
         <input id="newRoleColor" type="color" value="#7c3aed" aria-label="New role color">
         <button class="btn btn-secondary" id="addRoleBtn" type="button">+ Role</button>
@@ -753,13 +753,14 @@ function moveBrawlerToTierEnd(mapName,dragged,tier){
 
 function renderRoleFilters(){
   if(activeRole&&!state.roles.some(r=>r.name===activeRole))activeRole="";
-  const el=document.getElementById("roleFilters");el.innerHTML="";
+  const el=document.getElementById("roleFilters"),manage=document.getElementById("roleManage");
+  el.innerHTML="";
+  manage.querySelectorAll(".role-edit-row").forEach(x=>x.remove());
   const all=document.createElement("button");all.className="rolechip "+(!activeRole?"active":"");all.textContent="All";all.dataset.focusKey="role:*";all.setAttribute("aria-pressed",String(!activeRole));all.onclick=()=>{activeRole="";renderAll()};el.appendChild(all);
   state.roles.forEach((r,index)=>{
     const b=document.createElement("button");b.className="rolechip "+(activeRole===r.name?"active":"");b.dataset.focusKey="role:"+r.name;b.setAttribute("aria-pressed",String(activeRole===r.name));
     const dot=document.createElement("span");dot.className="role-dot";dot.style.background=r.color;
-    b.append(dot,r.name);
-    b.onclick=()=>{activeRole=r.name;renderAll()};el.appendChild(b);
+    b.append(dot,r.name);b.onclick=()=>{activeRole=r.name;renderAll()};el.appendChild(b);
 
     const row=document.createElement("div");row.className="role-edit-row";
     const name=document.createElement("input");name.className="input role-name-edit";name.value=r.name;name.maxLength=28;name.setAttribute("aria-label","Edit "+r.name+" role name");
@@ -784,7 +785,7 @@ function renderRoleFilters(){
       if(activeRole===old)activeRole="";
       persist();renderAll();toast("Role deleted");
     };
-    row.append(name,color,save,del);el.appendChild(row);
+    row.append(name,color,save,del);manage.insertBefore(row,manage.firstChild);
   })
 }
 function addCustomRole(){
