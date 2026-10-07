@@ -381,42 +381,43 @@ try{
   cloudDb=firebase.firestore();
 }catch(e){console.warn("Firebase unavailable; using browser storage only.",e)}
 
+async function readCloudSnapshot(meta,source="server"){
+  const ref=cloudDb.collection("boards").doc(CLOUD_BOARD);
+  const n=Number(meta.chunks)||0;
+  if(!Number.isInteger(n)||n<1||n>100)throw new Error("Invalid cloud chunk count");
+  const revision=meta.revision;
+  const collection=revision?ref.collection("snapshots").doc(revision).collection("chunks"):ref.collection("chunks");
+  const docs=await Promise.all(Array.from({length:n},(_,i)=>collection.doc(String(i)).get({source})));
+  const parts=docs.map((d,i)=>{if(!d.exists||typeof d.data().data!=="string")throw new Error("Missing cloud chunk "+i);return d.data().data});
+  return BrawlStorage.normalizeState(JSON.parse(parts.join(""))).state;
+}
 async function loadCloudState(){
-  if(!cloudDb)return null;
+  if(!cloudDb)return {ok:false};
   try{
-    const ref=cloudDb.collection("boards").doc(CLOUD_BOARD);
-    const meta=await ref.get();
-    if(!meta.exists)return null;
-    const n=Number(meta.data().chunks)||0;
-    if(!n)return null;
-    const parts=[];
-    for(let i=0;i<n;i++){
-      const d=await ref.collection("chunks").doc(String(i)).get();
-      if(!d.exists||typeof d.data().data!=="string")throw new Error("Missing cloud chunk "+i);
-      parts.push(d.data().data);
-    }
-    return BrawlStorage.normalizeState(JSON.parse(parts.join(""))).state;
-  }catch(e){console.warn("Cloud load failed; using browser copy.",e);return null}
+    const meta=await cloudDb.collection("boards").doc(CLOUD_BOARD).get({source:"server"});
+    if(!meta.exists)return {ok:true,empty:true};
+    return {ok:true,state:await readCloudSnapshot(meta.data(),"server"),meta:meta.data()};
+  }catch(e){console.warn("Cloud load failed; cloud writes disabled.",e);return {ok:false}}
 }
 async function saveCloudStateNow(){
-  if(!cloudDb||!state||cloudApplying||cloudBootReadOnly)return;
   cloudSaveTimer=null;
+  if(!cloudDb||!state||cloudApplying||cloudBootReadOnly||cloudSaving)return;
   cloudSaving=true;
   const saveGeneration=cloudEditGeneration;
   try{
-    const json=BrawlStorage.serializeState(state);
-    const parts=[];
+    const json=BrawlStorage.serializeState(state),parts=[];
     for(let i=0;i<json.length;i+=CLOUD_CHUNK)parts.push(json.slice(i,i+CLOUD_CHUNK));
     const ref=cloudDb.collection("boards").doc(CLOUD_BOARD);
-    const old=await ref.get(),oldN=old.exists?(Number(old.data().chunks)||0):0;
-    for(let i=0;i<parts.length;i++) await ref.collection("chunks").doc(String(i)).set({data:parts[i]});
-    for(let i=parts.length;i<oldN;i++) await ref.collection("chunks").doc(String(i)).delete();
-    await ref.set({chunks:parts.length,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
-    if(saveGeneration===cloudEditGeneration){cloudLocalDirty=false;cloudSeenUpdate=cloudUpdateKey((await ref.get({source:"server"})).data()||{});}
-  }catch(e){console.warn("Cloud save failed; browser copy is still safe.",e)}
+    const revision=Date.now().toString(36)+"-"+Math.random().toString(36).slice(2);
+    const snap=ref.collection("snapshots").doc(revision);
+    // Never overwrite active chunks. Readers only see this revision after all writes succeed.
+    await Promise.all(parts.map((data,i)=>snap.collection("chunks").doc(String(i)).set({data})));
+    await ref.set({revision,chunks:parts.length,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
+    if(saveGeneration===cloudEditGeneration){cloudLocalDirty=false;cloudSeenRevision=revision;}
+  }catch(e){console.warn("Cloud save failed; retrying.",e)}
   finally{
     cloudSaving=false;
-    if(cloudLocalDirty&&!cloudSaveTimer)cloudSaveTimer=setTimeout(saveCloudStateNow,150);
+    if(cloudLocalDirty&&!cloudSaveTimer)cloudSaveTimer=setTimeout(saveCloudStateNow,1500);
   }
 }
 function scheduleCloudSave(){
@@ -427,82 +428,43 @@ function scheduleCloudSave(){
   cloudSaveTimer=setTimeout(saveCloudStateNow,900);
 }
 
-// Live collaboration: the board metadata changes only after all chunks have been written,
-// so listening to it gives every open device a complete, consistent snapshot.
-let cloudUnsubscribe=null,cloudSeenUpdate=null;
-function cloudUpdateKey(data){
-  const t=data&&data.updatedAt;
-  return t&&typeof t.toMillis==="function"?String(t.toMillis()):null;
-}
-function startCloudLiveSync(){
-  if(!cloudDb||cloudUnsubscribe)return;
-  const ref=cloudDb.collection("boards").doc(CLOUD_BOARD);
-  cloudUnsubscribe=ref.onSnapshot(async snap=>{
-    if(!snap.exists||!state)return;
-    if(snap.metadata&&snap.metadata.hasPendingWrites)return;
-    if(cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
-    const data=snap.data()||{},key=cloudUpdateKey(data);
-    // The first snapshot is the board boot already loaded. Local saves also arrive here;
-    // re-applying an identical board is harmless, but skipping the known revision avoids flicker.
-    if(key&&key===cloudSeenUpdate)return;
-    try{
-      const n=Number(data.chunks)||0;
-      if(!n)return;
-      const reads=[];
-      for(let i=0;i<n;i++)reads.push(ref.collection("chunks").doc(String(i)).get());
-      const docs=await Promise.all(reads),parts=[];
-      for(let i=0;i<docs.length;i++){
-        const d=docs[i];
-        if(!d.exists||typeof d.data().data!=="string")throw new Error("Missing cloud chunk "+i);
-        parts.push(d.data().data);
-      }
-      const next=BrawlStorage.normalizeState(JSON.parse(parts.join(""))).state;
-      if(cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
-      if(key)cloudSeenUpdate=key;
-      // Don't let applying a remote change trigger another cloud write.
-      cloudApplying=true;
-      state=next;
-      upgradeLoadedBoard(state);
-      BrawlStorage.reconcileWithRoster(state,rosterNames());
-      BrawlStorage.ensureClassRoles(state,roster);
-      store.save(state);
-      if(!isValidMapKey(currentMap))currentMap=BASE_MAP;
-      renderAll();
-      if(selected&&roster.some(b=>b.name===selected))selectBrawler(selected);
-    }catch(e){console.warn("Live cloud update failed.",e)}
-    finally{cloudApplying=false}
-  },e=>console.warn("Live cloud listener failed.",e));
-}
-// Fallback for browsers/networks where Firestore's streaming listener is delayed or blocked.
-// This still updates the open page automatically; no manual refresh is needed.
-let cloudPollTimer=null,cloudPollBusy=false;
-async function pollCloudState(){
-  if(!cloudDb||!state||cloudApplying||cloudPollBusy||cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
-  cloudPollBusy=true;
+// Immutable snapshots prevent partial saves and stale cached chunks.
+let cloudUnsubscribe=null,cloudPollTimer=null,cloudPollBusy=false,cloudSeenRevision=null;
+async function applyCloudMetadata(data){
+  const revision=data.revision||("legacy-"+(data.updatedAt?.toMillis?.()||"0"));
+  if(revision===cloudSeenRevision||cloudLocalDirty||cloudSaving||cloudSaveTimer||cloudApplying)return;
+  const generation=cloudEditGeneration;
+  const next=await readCloudSnapshot(data,"server");
+  if(generation!==cloudEditGeneration||cloudLocalDirty||cloudSaving||cloudSaveTimer||cloudApplying)return;
+  cloudApplying=true;
   try{
-    const ref=cloudDb.collection("boards").doc(CLOUD_BOARD),meta=await ref.get({source:"server"});
-    if(!meta.exists)return;
-    const data=meta.data()||{},key=cloudUpdateKey(data);
-    if(key&&key===cloudSeenUpdate)return;
-    const n=Number(data.chunks)||0;if(!n)return;
-    const docs=await Promise.all(Array.from({length:n},(_,i)=>ref.collection("chunks").doc(String(i)).get({source:"server"})));
-    const parts=docs.map((d,i)=>{if(!d.exists||typeof d.data().data!=="string")throw new Error("Missing cloud chunk "+i);return d.data().data});
-    const next=BrawlStorage.normalizeState(JSON.parse(parts.join(""))).state;
-    if(cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
-    if(key)cloudSeenUpdate=key;
-    cloudApplying=true;
     state=next;upgradeLoadedBoard(state);
     BrawlStorage.reconcileWithRoster(state,rosterNames());
     BrawlStorage.ensureClassRoles(state,roster);
     store.save(state);
+    cloudSeenRevision=revision;
     if(!isValidMapKey(currentMap))currentMap=BASE_MAP;
     renderAll();if(selected&&roster.some(b=>b.name===selected))selectBrawler(selected);
-  }catch(e){console.warn("Cloud polling update failed.",e)}
-  finally{cloudApplying=false;cloudPollBusy=false}
+  }finally{cloudApplying=false}
+}
+function startCloudLiveSync(){
+  if(!cloudDb||cloudUnsubscribe||cloudBootReadOnly)return;
+  cloudUnsubscribe=cloudDb.collection("boards").doc(CLOUD_BOARD).onSnapshot(snap=>{
+    if(!snap.exists||snap.metadata.hasPendingWrites)return;
+    applyCloudMetadata(snap.data()).catch(e=>console.warn("Live sync failed.",e));
+  },e=>console.warn("Live sync listener failed.",e));
+}
+async function pollCloudState(){
+  if(!cloudDb||cloudPollBusy||cloudBootReadOnly||cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
+  cloudPollBusy=true;
+  try{
+    const meta=await cloudDb.collection("boards").doc(CLOUD_BOARD).get({source:"server"});
+    if(meta.exists)await applyCloudMetadata(meta.data());
+  }catch(e){console.warn("Cloud polling failed.",e)}
+  finally{cloudPollBusy=false}
 }
 function startCloudPolling(){
-  if(cloudPollTimer||!cloudDb)return;
-  cloudPollTimer=setInterval(pollCloudState,1500);
+  if(!cloudPollTimer&&cloudDb&&!cloudBootReadOnly)cloudPollTimer=setInterval(pollCloudState,3000);
 }
 window.addEventListener("pagehide",()=>{
   if(cloudUnsubscribe){cloudUnsubscribe();cloudUnsubscribe=null}
@@ -541,11 +503,14 @@ async function bootSteps(){
   // Saved data is read before the network so the board and every button work at once,
   // and a slow or failed API call can never leave `state` empty.
   cloudApplying=true;
-  const cloudState=await loadCloudState();
-  state=cloudState||loadSavedState();
-  const cloudBootFailed=!cloudState;
-  if(cloudBootFailed){cloudLocalDirty=true;cloudBootReadOnly=true;}
-  if(cloudState) store.save(state);
+  const cloudResult=await loadCloudState();
+  const cloudBootFailed=!cloudResult.ok;
+  if(cloudBootFailed)cloudBootReadOnly=true;
+  state=cloudResult.state||loadSavedState();
+  if(cloudResult.state){
+    store.save(state);
+    cloudSeenRevision=cloudResult.meta.revision||("legacy-"+(cloudResult.meta.updatedAt?.toMillis?.()||"0"));
+  }
   cloudApplying=false;
   const pruned=upgradeLoadedBoard(state);
   if(!isValidMapKey(currentMap)) currentMap=BASE_MAP;
@@ -558,7 +523,7 @@ async function bootSteps(){
   startCloudLiveSync();
   startCloudPolling();
   if(pruned.maps.length){
-    if(!cloudBootFailed)persist();
+    store.save(state);
     // A banner, not a toast: the deletion can't be undone, and the roster or a share link would
     // replace a toast at once. A storage problem already in the banner matters more.
     const shown=pruned.maps.slice(0,5).join(", ")+(pruned.maps.length>5?", …":"");
@@ -576,10 +541,10 @@ async function bootSteps(){
   }
   BrawlStorage.reconcileWithRoster(state,rosterNames());
   BrawlStorage.ensureClassRoles(state,roster);
-  if(!cloudBootFailed)persist();
+  store.save(state);
   renderAll();
   if(selected)selectBrawler(selected);
-  if(cloudBootFailed)showBanner("Cloud data could not be loaded. This tab is read-only for cloud saving until you reload. Do not edit here; keep your existing saved tab open.");
+  if(cloudBootFailed)showBanner("Cloud unavailable: cloud saving is disabled to protect shared data. Reload when connected.");
 }
 // Roles are the seven official classes (no custom roles). Brawlers keep the classes they were
 // given; a brawler with no entry yet — first run, a new release — is tagged with its class.
