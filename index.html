@@ -103,6 +103,15 @@ span.mapbtn{cursor:default}span.mapbtn:hover{background:transparent}
 .rolechip:not(.active):hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
 .rolechip.active{background:var(--color-text);color:var(--color-bg);border-color:var(--color-text)}
 .role-dot{display:inline-block;width:9px;height:9px}
+.role-manage{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+.role-manage input[type="text"]{width:120px;padding:5px 7px}
+.role-manage input[type="color"]{width:32px;height:30px;padding:2px;border:1px solid var(--color-divider);background:transparent}
+.role-edit-row{display:flex;align-items:center;gap:6px;width:100%;margin-top:6px}
+.role-edit-row .role-name-edit{width:130px;padding:5px 7px}
+.role-edit-row .role-color-edit{width:34px;height:30px;padding:2px}
+.role-edit-row .btn{padding:5px 8px;font-size:11px}
+.bcard .portrait-wrap{width:62px;height:62px;display:flex;align-items:center;justify-content:center;background:var(--portrait-bg,transparent);border-radius:8px;overflow:hidden;flex:none}
+.bcard .portrait-wrap img{width:56px;height:56px;object-fit:contain}
 
 /* tier board */
 .search-row{margin:var(--space-4) 0 var(--space-3)}
@@ -273,6 +282,11 @@ textarea.input:disabled{opacity:.45;cursor:not-allowed}
     <div class="rolebar">
       <span class="rb-label">Roles</span>
       <div class="rolefilters" id="roleFilters"></div>
+      <div class="role-manage">
+        <input class="input" id="newRoleName" type="text" maxlength="28" placeholder="New role" aria-label="New role name">
+        <input id="newRoleColor" type="color" value="#7c3aed" aria-label="New role color">
+        <button class="btn btn-secondary" id="addRoleBtn" type="button">+ Role</button>
+      </div>
     </div>
     <div class="grid">
       <section>
@@ -735,13 +749,43 @@ function renderRoleFilters(){
   if(activeRole&&!state.roles.some(r=>r.name===activeRole))activeRole="";
   const el=document.getElementById("roleFilters");el.innerHTML="";
   const all=document.createElement("button");all.className="rolechip "+(!activeRole?"active":"");all.textContent="All";all.dataset.focusKey="role:*";all.setAttribute("aria-pressed",String(!activeRole));all.onclick=()=>{activeRole="";renderAll()};el.appendChild(all);
-  state.roles.forEach(r=>{
+  state.roles.forEach((r,index)=>{
     const b=document.createElement("button");b.className="rolechip "+(activeRole===r.name?"active":"");b.dataset.focusKey="role:"+r.name;b.setAttribute("aria-pressed",String(activeRole===r.name));
-    // Built with DOM APIs, not innerHTML: role data can come from imported files and share links.
     const dot=document.createElement("span");dot.className="role-dot";dot.style.background=r.color;
     b.append(dot,r.name);
-    b.onclick=()=>{activeRole=r.name;renderAll()};el.appendChild(b)
+    b.onclick=()=>{activeRole=r.name;renderAll()};el.appendChild(b);
+
+    const row=document.createElement("div");row.className="role-edit-row";
+    const name=document.createElement("input");name.className="input role-name-edit";name.value=r.name;name.maxLength=28;name.setAttribute("aria-label","Edit "+r.name+" role name");
+    const color=document.createElement("input");color.type="color";color.className="role-color-edit";color.value=r.color;color.setAttribute("aria-label","Edit "+r.name+" portrait background color");
+    const save=document.createElement("button");save.className="btn btn-secondary";save.textContent="Save";
+    const del=document.createElement("button");del.className="btn btn-ghost";del.textContent="Delete";
+    save.onclick=()=>{
+      const old=r.name,newName=name.value.trim();
+      if(!newName)return toast("Role name can't be empty");
+      if(state.roles.some((x,j)=>j!==index&&x.name.toLowerCase()===newName.toLowerCase()))return toast("That role already exists");
+      r.name=newName;r.color=color.value;
+      Object.keys(state.brawlerRoles).forEach(n=>{state.brawlerRoles[n]=(state.brawlerRoles[n]||[]).map(x=>x===old?newName:x)});
+      if(activeRole===old)activeRole=newName;
+      persist();renderAll();toast("Role updated");
+    };
+    color.oninput=()=>{r.color=color.value;persist();renderRoleFilters();renderBoard();openRoleAssignment()};
+    del.onclick=()=>{
+      const old=r.name;if(!confirm("Delete role '"+old+"'?"))return;
+      state.roles.splice(index,1);
+      Object.keys(state.brawlerRoles).forEach(n=>{state.brawlerRoles[n]=(state.brawlerRoles[n]||[]).filter(x=>x!==old)});
+      if(activeRole===old)activeRole="";
+      persist();renderAll();toast("Role deleted");
+    };
+    row.append(name,color,save,del);el.appendChild(row);
   })
+}
+function addCustomRole(){
+  const input=document.getElementById("newRoleName"),picker=document.getElementById("newRoleColor");
+  const name=input.value.trim();if(!name)return toast("Enter a role name");
+  if(state.roles.some(r=>r.name.toLowerCase()===name.toLowerCase()))return toast("That role already exists");
+  state.roles.push({name,color:picker.value});input.value="";
+  persist();renderAll();toast("Role added");
 }
 function openRoleAssignment(){
   const area=document.getElementById("roleAssignmentArea");
@@ -957,7 +1001,10 @@ function renderBoard(){
         if(portraitTry<portraitFallbacks.length) img.src=portraitFallbacks[portraitTry++];
         else {img.onerror=null;img.style.display="none";}
       };
-      const nm=document.createElement("div");nm.className="name";nm.textContent=x.name;c.append(img,nm);
+      const portrait=document.createElement("div");portrait.className="portrait-wrap";
+      if(colors.length)portrait.style.setProperty("--portrait-bg",colors[0]);
+      portrait.appendChild(img);
+      const nm=document.createElement("div");nm.className="name";nm.textContent=x.name;c.append(portrait,nm);
       if(roles.length){const labs=document.createElement("div");labs.className="role-labels";roles.slice(0,3).forEach(r=>{const color=roleColor.get(r);if(color){const chip=document.createElement("span");chip.className="mini-role";chip.style.background=color;chip.style.color=readableOn(color);chip.textContent=r;labs.appendChild(chip)}});c.appendChild(labs)}
       // Cards are buttons for keyboard and screen-reader users; dragging stays the mouse shortcut.
       c.tabIndex=0;c.setAttribute("role","button");c.dataset.focusKey="card:"+x.name;c.dataset.name=x.name;
@@ -1014,6 +1061,8 @@ function renderNotes(){
 // openRoleAssignment is included so the role buttons follow a replaced board.
 function renderAll(){renderSidebar();renderMapView();renderRoleFilters();renderBoard();renderNotes();openRoleAssignment();renderTierPicker()}
 document.getElementById("mapSearch").oninput=renderSidebar;
+document.getElementById("addRoleBtn").onclick=addCustomRole;
+document.getElementById("newRoleName").addEventListener("keydown",e=>{if(e.key==="Enter")addCustomRole()});
 document.getElementById("search").oninput=renderBoard;
 // Notes are written into state on every keystroke and persisted shortly after, so
 // re-renders, switching brawler/map, or closing the tab can never discard typed text.
