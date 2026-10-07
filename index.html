@@ -412,7 +412,7 @@ async function saveCloudStateNow(){
     for(let i=0;i<parts.length;i++) await ref.collection("chunks").doc(String(i)).set({data:parts[i]});
     for(let i=parts.length;i<oldN;i++) await ref.collection("chunks").doc(String(i)).delete();
     await ref.set({chunks:parts.length,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
-    if(saveGeneration===cloudEditGeneration)cloudLocalDirty=false;
+    if(saveGeneration===cloudEditGeneration){cloudLocalDirty=false;cloudSeenUpdate=cloudUpdateKey((await ref.get({source:"server"})).data()||{});}
   }catch(e){console.warn("Cloud save failed; browser copy is still safe.",e)}
   finally{
     cloudSaving=false;
@@ -440,12 +440,11 @@ function startCloudLiveSync(){
   cloudUnsubscribe=ref.onSnapshot(async snap=>{
     if(!snap.exists||!state)return;
     if(snap.metadata&&snap.metadata.hasPendingWrites)return;
-    if(cloudLocalDirty||cloudSaving)return;
+    if(cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
     const data=snap.data()||{},key=cloudUpdateKey(data);
     // The first snapshot is the board boot already loaded. Local saves also arrive here;
     // re-applying an identical board is harmless, but skipping the known revision avoids flicker.
     if(key&&key===cloudSeenUpdate)return;
-    if(key)cloudSeenUpdate=key;
     try{
       const n=Number(data.chunks)||0;
       if(!n)return;
@@ -458,6 +457,8 @@ function startCloudLiveSync(){
         parts.push(d.data().data);
       }
       const next=BrawlStorage.normalizeState(JSON.parse(parts.join(""))).state;
+      if(cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
+      if(key)cloudSeenUpdate=key;
       // Don't let applying a remote change trigger another cloud write.
       cloudApplying=true;
       state=next;
@@ -476,18 +477,19 @@ function startCloudLiveSync(){
 // This still updates the open page automatically; no manual refresh is needed.
 let cloudPollTimer=null,cloudPollBusy=false;
 async function pollCloudState(){
-  if(!cloudDb||!state||cloudApplying||cloudPollBusy||cloudLocalDirty||cloudSaving)return;
+  if(!cloudDb||!state||cloudApplying||cloudPollBusy||cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
   cloudPollBusy=true;
   try{
     const ref=cloudDb.collection("boards").doc(CLOUD_BOARD),meta=await ref.get({source:"server"});
     if(!meta.exists)return;
     const data=meta.data()||{},key=cloudUpdateKey(data);
     if(key&&key===cloudSeenUpdate)return;
-    if(key)cloudSeenUpdate=key;
     const n=Number(data.chunks)||0;if(!n)return;
     const docs=await Promise.all(Array.from({length:n},(_,i)=>ref.collection("chunks").doc(String(i)).get({source:"server"})));
     const parts=docs.map((d,i)=>{if(!d.exists||typeof d.data().data!=="string")throw new Error("Missing cloud chunk "+i);return d.data().data});
     const next=BrawlStorage.normalizeState(JSON.parse(parts.join(""))).state;
+    if(cloudLocalDirty||cloudSaving||cloudSaveTimer)return;
+    if(key)cloudSeenUpdate=key;
     cloudApplying=true;
     state=next;upgradeLoadedBoard(state);
     BrawlStorage.reconcileWithRoster(state,rosterNames());
