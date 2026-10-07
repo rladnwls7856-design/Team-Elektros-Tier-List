@@ -1,0 +1,7 @@
+node_modules/
+# Local Claude Code tooling (preview server config); not part of the site.
+.claude/
+*.log
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,12 @@
+{
+  "name": "team-brawl-tier-list",
+  "private": true,
+  "description": "Static Brawl Stars team tier-list board (GitHub Pages). No runtime dependencies.",
+  "scripts": {
+    "test": "node --test",
+    "catalog": "node tools/build-map-catalog.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
