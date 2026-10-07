@@ -506,6 +506,7 @@ async function bootSteps(){
   const cloudResult=await loadCloudState();
   const cloudBootFailed=!cloudResult.ok;
   if(cloudBootFailed)cloudBootReadOnly=true;
+  if(cloudResult.empty)cloudBootReadOnly=true;
   state=cloudResult.state||loadSavedState();
   if(cloudResult.state){
     store.save(state);
@@ -544,7 +545,7 @@ async function bootSteps(){
   store.save(state);
   renderAll();
   if(selected)selectBrawler(selected);
-  if(cloudBootFailed)showBanner("Cloud unavailable: cloud saving is disabled to protect shared data. Reload when connected.");
+  if(cloudBootFailed||cloudResult.empty)showBanner("Cloud data is unavailable or missing. Cloud writes are disabled to prevent accidental resets. Contact the board owner before editing.");
 }
 // Roles are the seven official classes (no custom roles). Brawlers keep the classes they were
 // given; a brawler with no entry yet — first run, a new release — is tagged with its class.
