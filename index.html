@@ -375,7 +375,7 @@ const FIREBASE_CONFIG={
   measurementId:"G-9G6QVC6JTD"
 };
 const CLOUD_BOARD="team-elektros", CLOUD_CHUNK=600000;
-let cloudDb=null,cloudSaveTimer=null,cloudApplying=false,cloudLocalDirty=false,cloudSaving=false,cloudEditGeneration=0;
+let cloudDb=null,cloudSaveTimer=null,cloudApplying=false,cloudLocalDirty=false,cloudSaving=false,cloudEditGeneration=0,cloudBootReadOnly=false;
 try{
   firebase.initializeApp(FIREBASE_CONFIG);
   cloudDb=firebase.firestore();
@@ -399,7 +399,7 @@ async function loadCloudState(){
   }catch(e){console.warn("Cloud load failed; using browser copy.",e);return null}
 }
 async function saveCloudStateNow(){
-  if(!cloudDb||!state||cloudApplying)return;
+  if(!cloudDb||!state||cloudApplying||cloudBootReadOnly)return;
   cloudSaveTimer=null;
   cloudSaving=true;
   const saveGeneration=cloudEditGeneration;
@@ -420,7 +420,7 @@ async function saveCloudStateNow(){
   }
 }
 function scheduleCloudSave(){
-  if(!cloudDb||!state||cloudApplying)return;
+  if(!cloudDb||!state||cloudApplying||cloudBootReadOnly)return;
   cloudLocalDirty=true;
   cloudEditGeneration++;
   clearTimeout(cloudSaveTimer);
@@ -543,6 +543,8 @@ async function bootSteps(){
   cloudApplying=true;
   const cloudState=await loadCloudState();
   state=cloudState||loadSavedState();
+  const cloudBootFailed=!cloudState;
+  if(cloudBootFailed){cloudLocalDirty=true;cloudBootReadOnly=true;}
   if(cloudState) store.save(state);
   cloudApplying=false;
   const pruned=upgradeLoadedBoard(state);
@@ -556,7 +558,7 @@ async function bootSteps(){
   startCloudLiveSync();
   startCloudPolling();
   if(pruned.maps.length){
-    persist();
+    if(!cloudBootFailed)persist();
     // A banner, not a toast: the deletion can't be undone, and the roster or a share link would
     // replace a toast at once. A storage problem already in the banner matters more.
     const shown=pruned.maps.slice(0,5).join(", ")+(pruned.maps.length>5?", …":"");
@@ -574,9 +576,10 @@ async function bootSteps(){
   }
   BrawlStorage.reconcileWithRoster(state,rosterNames());
   BrawlStorage.ensureClassRoles(state,roster);
-  persist();
+  if(!cloudBootFailed)persist();
   renderAll();
   if(selected)selectBrawler(selected);
+  if(cloudBootFailed)showBanner("Cloud data could not be loaded. This tab is read-only for cloud saving until you reload. Do not edit here; keep your existing saved tab open.");
 }
 // Roles are the seven official classes (no custom roles). Brawlers keep the classes they were
 // given; a brawler with no entry yet — first run, a new release — is tagged with its class.
