@@ -23,7 +23,7 @@
   // 4: catalog map keys and drawings. A version-3 app would drop drawings on its next save,
   // so it must see version 4 as "newer" and set the original aside first.
   const SCHEMA_VERSION = 4;
-  const TIERS = Object.freeze(["S", "A", "B", "C", "D"]);
+  const TIERS = Object.freeze(["S", "A", "B", "C", "D", "F"]);
   // Catalog maps are not listed in `maps`; it holds All Maps plus custom boards.
   const DEFAULT_MAPS = Object.freeze(["All Maps"]);
   const DEFAULT_PROJECT = "World Finals Prep";
